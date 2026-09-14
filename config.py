@@ -67,6 +67,17 @@ OPENAI_API_KEY = LLM_API_KEY if LLM_PROVIDER == "openai_compatible" else ""
 OPENAI_MODEL = LLM_MODEL
 OPENAI_BASE_URL = LLM_BASE_URL
 
+# 行情 provider（V2）：yfinance 保底；massive 需 MASSIVE_API_KEY，缺證自動回落
+MARKET_DATA_PROVIDER = os.getenv("MARKET_DATA_PROVIDER", "yfinance").strip().lower()
+MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY", "").strip()
+
+# Serenity provider（V2）：archive 保底；x 需 X_BEARER_TOKEN
+SERENITY_PROVIDER = os.getenv("SERENITY_PROVIDER", "archive").strip().lower()
+X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "").strip()
+
+# 期權 provider（V2）：none = 整層 UNAVAILABLE（不假裝中性）
+OPTIONS_PROVIDER = os.getenv("OPTIONS_PROVIDER", "none").strip().lower()
+
 # Telegram 推送（可選；沒設定就只寫 signals.log + 螢幕輸出）
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()

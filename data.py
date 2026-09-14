@@ -1,20 +1,28 @@
-"""資料層：用 yfinance 拉日 K、盤中 5 分 K、新聞、財報日。全公開資料，不需任何帳戶。"""
+"""資料層（V2 起經 market_data 正規化；對外返回欄位 daily/intraday/news/next_earnings 不變，
+另加 freshness 元數據）。全公開資料，不需任何帳戶。"""
 from datetime import date
+
+import market_data
 import yfinance as yf
 
 
 def fetch(symbol: str) -> dict:
-    tkr = yf.Ticker(symbol)
-    daily = tkr.history(period="6mo", interval="1d")
-    if daily.empty:
+    daily_bars = market_data.get_daily_bars(symbol, years=1)
+    intraday_bars = market_data.get_intraday_bars(symbol)
+    daily, intraday = daily_bars["df"], intraday_bars["df"]
+    if daily is None or daily.empty:
         raise RuntimeError(f"{symbol}: 拿不到日 K 資料（代碼可能錯誤或資料源異常）")
-    intraday = tkr.history(period="5d", interval="5m")
+    tkr = yf.Ticker(symbol)
     return {
         "symbol": symbol,
         "daily": daily,
-        "intraday": intraday,
+        "intraday": intraday if intraday is not None else daily.iloc[0:0],
         "news": _news(tkr),
         "next_earnings": _next_earnings(tkr),
+        "freshness": {
+            "daily": {k: daily_bars[k] for k in ("provider", "timestamp", "age_seconds", "status")},
+            "intraday": {k: intraday_bars[k] for k in ("provider", "timestamp", "age_seconds", "status")},
+        },
     }
 
 
