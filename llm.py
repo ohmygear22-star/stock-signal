@@ -1,43 +1,19 @@
-"""消息面分析層：把指標摘要 + 新聞標題交給 OpenAI（Astra）評分。沒有 API key 時自動跳過。
-注意：LLM 的輸出是「參考意見」，不是買賣信號本體；信號一律以規則引擎為準。"""
+"""消息面分析層（V2 起全部經 ai_provider 路由，本檔不再直接持有 HTTP 邏輯）。
+沒有可用 LLM 時所有函數安靜返回 None / 降級——機械信號層永不受影響。"""
 import json
 import re
 
-import requests
+import ai_provider
+from config import OPENAI_API_KEY  # V1 兼容鏡像（其他模組用 llm.OPENAI_API_KEY 判斷可用性）
 
-from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 
-SYSTEM_PROMPT = """你是嚴謹的股票消息面分析師。用戶會給你技術指標摘要和新聞標題，你只做消息面判讀。
-規則：
-1. 只根據給定資訊判斷，不編造不存在的新聞或數據。
-2. 用戶訊息會說明監控標的與底層股票的方向關係（正相關或反向），評分必須按該關係換算到「監控標的本身」。
-3. 必須只輸出一個 JSON 對象，不要輸出其他文字，格式：
-{"score": <-2 到 2 的整數，正=利多監控標的本身>, "stance": "<偏多|中性|偏空>", "reasons": ["原因1", "原因2", "原因3"]}
-4. 全部用繁體中文。新聞不足以下判斷時 score 給 0，reasons 說明資訊不足。"""
+def model_label() -> str:
+    return ai_provider.model_name()
 
 
 def complete(system: str, user: str, temperature: float = 0.2) -> str | None:
-    """通用 LLM 調用（宏觀面分類、新聞快評等用）。未設定 key 回傳 None。"""
-    if not OPENAI_API_KEY:
-        return None
-    try:
-        resp = requests.post(
-            f"{OPENAI_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={
-                "model": OPENAI_MODEL,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "temperature": temperature,
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except Exception:
-        return None
+    """通用 LLM 調用（宏觀面分類、新聞快評、翻譯等）。"""
+    return ai_provider.complete(system, user, temperature)
 
 
 def translate_tc(text: str) -> str | None:
@@ -51,7 +27,7 @@ def translate_tc(text: str) -> str | None:
 
 def translate_tc_batch(texts: list[str]) -> list[str | None]:
     """批量翻譯（一次調用）：逐行對應返回譯文，失敗位置為 None。"""
-    if not texts or not OPENAI_API_KEY:
+    if not texts or not ai_provider.available():
         return [None] * len(texts)
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
     out = complete(
@@ -70,10 +46,19 @@ def translate_tc_batch(texts: list[str]) -> list[str | None]:
     return result
 
 
+SYSTEM_PROMPT = """你是嚴謹的股票消息面分析師。用戶會給你技術指標摘要和新聞標題，你只做消息面判讀。
+規則：
+1. 只根據給定資訊判斷，不編造不存在的新聞或數據。
+2. 用戶訊息會說明監控標的與底層股票的方向關係（正相關或反向），評分必須按該關係換算到「監控標的本身」。
+3. 必須只輸出一個 JSON 對象，不要輸出其他文字，格式：
+{"score": <-2 到 2 的整數，正=利多監控標的本身>, "stance": "<偏多|中性|偏空>", "reasons": ["原因1", "原因2", "原因3"]}
+4. 全部用繁體中文。新聞不足以下判斷時 score 給 0，reasons 說明資訊不足。"""
+
+
 def analyze(target_symbol: str, underlying: str, summary: dict, news: list[dict],
             inverse: bool = False) -> dict | None:
     """回傳 {'score', 'stance', 'reasons'}；未設定 key 或呼叫失敗回傳 None。"""
-    if not OPENAI_API_KEY:
+    if not ai_provider.available():
         return None
     relation = (f"{underlying} 利多 = {target_symbol} 利空，方向需反轉" if inverse
                 else f"{target_symbol} 與 {underlying} 同方向")
@@ -83,25 +68,10 @@ def analyze(target_symbol: str, underlying: str, summary: dict, news: list[dict]
         f"技術指標摘要：{json.dumps(summary, ensure_ascii=False)}\n\n"
         f"{underlying} 近期新聞標題：\n{headlines}"
     )
-    try:
-        resp = requests.post(
-            f"{OPENAI_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={
-                "model": OPENAI_MODEL,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_msg},
-                ],
-                "temperature": 0.2,
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        return _parse_json(content)
-    except Exception as exc:
-        return {"score": 0, "stance": "分析失敗", "reasons": [f"LLM 呼叫失敗：{exc}"]}
+    content = complete(SYSTEM_PROMPT, user_msg)
+    if content is None:
+        return {"score": 0, "stance": "分析失敗", "reasons": ["LLM 呼叫失敗"]}
+    return _parse_json(content)
 
 
 def _parse_json(content: str) -> dict | None:

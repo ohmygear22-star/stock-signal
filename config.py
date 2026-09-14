@@ -54,10 +54,18 @@ def _float(key: str, default: float) -> float:
     except ValueError:
         return default
 
-# OpenAI（模型名稱未經聯網核實，預設 astra；不填 key 就自動跳過消息面層，其餘功能完整）
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "astra")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+# --- AI 提供者（V2：LLM_* 為主，OPENAI_* 為向後兼容的 legacy 鏡像）---
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "").strip().lower()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
+LLM_MODEL = os.getenv("LLM_MODEL", "").strip() or os.getenv("OPENAI_MODEL", "glm-5.3").strip()
+LLM_BASE_URL = (os.getenv("LLM_BASE_URL", "").strip() or
+                os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+if not LLM_PROVIDER:
+    LLM_PROVIDER = "openai_compatible" if LLM_API_KEY else "none"
+# legacy 鏡像：V1 代碼仍讀 OPENAI_*，行為不變
+OPENAI_API_KEY = LLM_API_KEY if LLM_PROVIDER == "openai_compatible" else ""
+OPENAI_MODEL = LLM_MODEL
+OPENAI_BASE_URL = LLM_BASE_URL
 
 # Telegram 推送（可選；沒設定就只寫 signals.log + 螢幕輸出）
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
