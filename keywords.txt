@@ -1,0 +1,26 @@
+# 關鍵詞絆網詞表：RSS 標題命中任一詞 → ⚡ 即時推送（中英不拘，一行一詞）
+# 隨時加詞存檔即生效
+Fed
+FOMC
+Powell
+CPI
+PCE
+inflation
+rate cut
+rate hike
+非農
+NFP
+tariff
+Trump
+Iran
+Israel
+Middle East
+missile
+strikes
+oil price
+Treasury
+recession
+bankruptcy
+layoffs
+chip ban
+export controls

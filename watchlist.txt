@@ -1,0 +1,15 @@
+# 監控清單：每行一個標的，直接加/刪股票改這個檔案即可，不用碰任何設定。
+# 兩種寫法：
+#   AAPL                              普通股票（消息面看它自己的新聞）
+#   SQQQ : leveraged_inverse : QQQ    反向/槓桿反向產品（套嚴格規則：6% 異動門檻、5% 強制止損提醒、decay 提醒）
+#                                     冒號後第三個是消息面要看的底層標的
+# 存檔後下一次掃描自動生效。
+
+AAPL
+NVDA
+CRWV
+# Serenity (@aleabitoreddit) 看空標的（加入監控；他重新評級時警報會響）
+IREN
+POET
+# 範例（把行首 # 拿掉就生效）：
+# SQQQ : leveraged_inverse : QQQ

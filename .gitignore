@@ -1,0 +1,18 @@
+# 敏感与运行时文件绝不入库
+.env
+.venv/
+__pycache__/
+
+# 日志与运行状态（本机/droplet 各自维护）
+signals.log
+launchd.log
+.last_daily
+.ledger_state.json
+ledger_state.json
+signals_ledger.jsonl
+.serenity_state.json
+.serenity_cache.json
+.rss_state.json
+.tripwire_state.json
+.rss_push_state.json
+.daemon_heartbeat.json
