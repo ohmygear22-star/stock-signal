@@ -11,6 +11,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).parent
 WATCHLIST_FILE = BASE_DIR / "watchlist.txt"
+LEARNING_FILE = BASE_DIR / "learning_universe.txt"
 DAILY_STATE_FILE = BASE_DIR / ".last_daily"
 
 VALID_PROFILES = {"stock", "leveraged_inverse"}
@@ -30,6 +31,17 @@ def parse_watchlist_line(line: str) -> dict | None:
         profile = "stock"
     underlying = parts[2].upper() if len(parts) > 2 and parts[2] else symbol
     return {"symbol": symbol, "profile": profile, "underlying": underlying}
+
+
+def load_learning_universe() -> list[dict]:
+    """學習宇宙（learning-only）：只採集不推送。格式與 watchlist 相同。"""
+    items = []
+    if LEARNING_FILE.exists():
+        for raw in LEARNING_FILE.read_text(encoding="utf-8").splitlines():
+            entry = parse_watchlist_line(raw)
+            if entry:
+                items.append(entry)
+    return items
 
 
 def load_watchlist() -> list[dict]:

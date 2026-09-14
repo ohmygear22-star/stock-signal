@@ -178,6 +178,32 @@ def do_daily_report() -> None:
     _hb("daily_report")
 
 
+def do_learning_eod() -> None:
+    """學習宇宙（learning-only）：每日收盤窗口評估一次並落 EOD 預測快照。
+    不進 push_policy、不發 Telegram、與 watchlist 行為完全隔離。"""
+    if market_hours.status() != "after_close" or _done_today("learning_eod"):
+        return
+    import data as data_mod
+    import market_data
+    import scoring
+    universe = config.load_learning_universe()
+    if not universe:
+        return
+    snap = market_data.get_market_snapshot()
+    ok = 0
+    for item in universe:
+        try:
+            ev = scoring.evaluate_symbol(item["symbol"],
+                                         data=data_mod.fetch(item["symbol"]),
+                                         market_snap=snap)
+            ledger.record_prediction(ev)
+            ok += 1
+        except Exception as exc:
+            log(f"學習宇宙 {item['symbol']} 評估失敗：{exc}")
+    log(f"學習宇宙 EOD 快照：{ok}/{len(universe)} 完成")
+    _hb("learning_eod")
+
+
 def do_scoring() -> None:
     now = market_hours.datetime_et()
     # 收盤日報後半小時以後才跑（且每天一次）
@@ -226,6 +252,7 @@ def main() -> int:
                 do_scoring_push()
                 due["scoring"] = time.time() + DURATIONS["scoring"]
             do_daily_report()
+            do_learning_eod()
             do_scoring()
             do_scorecard()
         except Exception as exc:

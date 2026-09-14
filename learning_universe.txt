@@ -1,0 +1,20 @@
+# 學習宇宙（learning-only）：只做每日 EOD 評估 + 預測快照記錄，
+# 不進 Telegram、不進盤中掃描、不影響 watchlist 行為。
+# 目的：加速觀察期樣本積累（Gate C 需要 ≥100 Tomorrow / ≥40 Week 已結算預測）。
+# 一行一個 ticker；# 開頭是註解。存檔後次日生效。
+
+MSFT
+META
+AMZN
+AMD
+AVGO
+TSM
+PLTR
+COST
+JPM
+UNH
+CAT
+XOM
+WMT
+JNJ
+GOOGL
