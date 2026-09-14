@@ -15,8 +15,141 @@ import requests
 BASE = Path(__file__).parent
 STATE_FILE = BASE / ".serenity_state.json"
 CACHE_FILE = BASE / ".serenity_cache.json"
+THESES_FILE = BASE / "serenity_theses.jsonl"  # V2：論點跟蹤賬本
 ARCHIVE_URL = ("https://raw.githubusercontent.com/yan-labs/"
                "serenity-aleabitoreddit/main/data/aleabitoreddit_tweets.json")
+X_USER = "aleabitoreddit"  # SERENITY_PROVIDER=x 時的官方數據目標（需 X_BEARER_TOKEN）
+
+
+def fetch_new_x() -> tuple[list[dict], str] | None:
+    """官方 X API 路徑（SERENITY_PROVIDER=x 且有 token）。失敗回 None → 上層回落 archive。"""
+    from config import SERENITY_PROVIDER, X_BEARER_TOKEN
+    if SERENITY_PROVIDER != "x" or not X_BEARER_TOKEN:
+        return None
+    try:
+        resp = requests.get(
+            f"https://api.x.com/2/users/by/username/{X_USER}/tweets",
+            headers={"Authorization": f"Bearer {X_BEARER_TOKEN}"},
+            params={"max_results": 25, "tweet.fields": "created_at"},
+            timeout=30)
+        if resp.status_code != 200:
+            return None
+        data = resp.json().get("data", [])
+        return ([{"id": str(t["id"]), "text": t["text"], "ts": t["created_at"]}
+                 for t in data], "OK（官方 X API）")
+    except Exception:
+        return None
+
+
+# ---------- V2：論點分類與跟蹤 ----------
+
+# 確定性關鍵詞（AI off 時的唯一分類依據；命中多類取最先）
+DETERMINISTIC_RULES = [
+    ("REDUCE_EXIT", -1, ["sold my", "trimmed", "took profit", "exited", "closed my", "sold all", "zero position"]),
+    ("CONVICTION_UP", +1, ["adding", "bought more", "tripled", "doubled my", "highest conviction", "largest position"]),
+    ("CONVICTION_DOWN", -1, ["downgrade", "cut to", "reducing", "trimmed my"]),
+    ("NEW_THESIS", 0, ["new thesis", "initiating", "opening a position", "starting a position"]),
+    ("CATALYST_UPDATE", 0, ["catalyst", "earnings", "backlog", "contract", "order win", "sold out", "capacity"]),
+    ("THESIS_UPDATE", 0, ["update:", "thesis update", "revisited", "re-rating"]),
+]
+
+
+def classify_deterministic(text: str) -> tuple[str, int | None]:
+    low = text.lower()
+    for label, stance_hint, kws in DETERMINISTIC_RULES:
+        if any(k in low for k in kws):
+            return label, stance_hint
+    return ("CASUAL_COMMENT" if low.startswith("@") else "UNKNOWN"), None
+
+
+def classify_ai(text: str, symbol: str) -> dict | None:
+    """AI ON：立場/類型/信念/時間尺度。必須引用原文，輸出 JSON。"""
+    import llm
+    if not llm.OPENAI_API_KEY:
+        return None
+    out = llm.complete(
+        "分析這條分析師 Serenity 的推文對指定股票的含義。只輸出 JSON："
+        '{"classification": "NEW_THESIS|THESIS_UPDATE|CONVICTION_UP|CONVICTION_DOWN|'
+        'CATALYST_UPDATE|REDUCE_EXIT|CASUAL_COMMENT", '
+        '"stance": -10到10(正=看他多), "conviction": 0到10, "horizon": "short|mid|long"}。'
+        "資訊不足時 classification 用 CASUAL_COMMENT。不得編造。",
+        f"股票：{symbol}\n推文：{text[:1500]}")
+    if not out:
+        return None
+    import json as _json, re as _re
+    m = _re.search(r"\{.*\}", out, _re.DOTALL)
+    if not m:
+        return None
+    try:
+        return _json.loads(m.group(0))
+    except ValueError:
+        return None
+
+
+def track_mention(hit: dict) -> list[dict]:
+    """把命中貼文寫入論點跟蹤賬本（每 ticker 一條），並回傳「有意義」事件（供 ledger）。
+    hit = {id, text, ts, symbols: [...]}"""
+    records, meaningful = [], []
+    known_ids = set()
+    if THESES_FILE.exists():
+        for line in THESES_FILE.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    r = json.loads(line)
+                    known_ids.add(r["post_id"] + "|" + r["ticker"])
+                except ValueError:
+                    pass
+    for sym in hit["symbols"]:
+        key = f"{hit['id']}|{sym}"
+        new_vs_repeat = "repeat" if key in known_ids else "new"
+        det_class, det_stance = classify_deterministic(hit["text"])
+        rec = {"post_id": hit["id"], "timestamp": hit["ts"], "ticker": sym,
+               "text": hit["text"][:600], "source": "archive",
+               "classification": det_class, "stance": det_stance,
+               "conviction": None, "new_vs_repeat": new_vs_repeat}
+        if new_vs_repeat == "new":
+            ai = classify_ai(hit["text"], sym)
+            if ai:
+                rec["classification"] = ai.get("classification", det_class)
+                rec["stance"] = ai.get("stance", det_stance)
+                rec["conviction"] = ai.get("conviction")
+            with THESES_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            records.append(rec)
+            if rec["classification"] not in ("CASUAL_COMMENT", "UNKNOWN"):
+                meaningful.append(rec)
+    return records, meaningful
+
+
+def thesis_summary(symbol: str, days: int = 60) -> str:
+    """近 N 天該 ticker 的論點跟蹤摘要（一行版，供日報/查詢）。"""
+    from datetime import datetime as _dt, timedelta as _td
+    if not THESES_FILE.exists():
+        return "無跟蹤記錄"
+    cutoff = _dt.now(timezone.utc) - _td(days=days)
+    rows = []
+    for line in THESES_FILE.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("ticker") != symbol:
+            continue
+        try:
+            ts = _dt.fromisoformat(r["timestamp"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if ts >= cutoff:
+            rows.append(r)
+    if not rows:
+        return "近 {d} 天無論點事件".format(d=days)
+    parts = [f"{r['classification']}({r['ts'] if 'ts' in r else r['timestamp'][:10]})"
+             for r in rows[-5:]]
+    return f"{len(rows)} 個論點事件：" + "、".join(parts)
 
 # 監控 ticker 的口語別名（ticker 本身自動比對，含 $TICKER 形式）；可用 aliases.txt 擴充
 DEFAULT_ALIASES = {

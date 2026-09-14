@@ -115,14 +115,23 @@ def do_watch_scan() -> None:
 
 def do_serenity() -> None:
     fresh, msg = serenity.fetch_new()
+    x_result = serenity.fetch_new_x()
+    if x_result:
+        fresh = (fresh or []) + x_result[0]
+        msg += "；" + x_result[1]
     if fresh:
         hits = serenity.match_watchlist(fresh, [i["symbol"] for i in config.load_watchlist()])
         for h in hits:
             notify.send("📡 Serenity 提及", _serenity_alert_text(h))
-            for sym in h["symbols"]:
-                ledger.record_event(sym, "serenity_mention", "WARN", "中性", 0.0,
-                                    extra={"note": h["text"][:120]},
-                                    dedup_key=f"ser-{h['id']}")
+            records, meaningful = serenity.track_mention(h)  # V2：論點跟蹤
+            for rec in meaningful:
+                ledger.record_event(rec["ticker"], f"serenity_{rec['classification']}",
+                                    "WARN", "中性" if not rec.get("stance") else
+                                    ("多" if rec["stance"] > 0 else "空"),
+                                    price=0.0,
+                                    extra={"note": rec["text"][:120],
+                                           "post_id": rec["post_id"]},
+                                    dedup_key=f"ser-{rec['post_id']}-{rec['ticker']}")
         log(f"Serenity {msg}，命中監控 {len(hits)} 條")
     _hb("serenity")
 
