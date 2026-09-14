@@ -34,12 +34,14 @@ def parse_watchlist_line(line: str) -> dict | None:
 
 
 def load_learning_universe() -> list[dict]:
-    """學習宇宙（learning-only）：只採集不推送。格式與 watchlist 相同。"""
-    items = []
+    """學習宇宙（learning-only）：只採集不推送。格式與 watchlist 相同；
+    大寫正規化、忽略空行/註解、跨檔案內部去重。"""
+    items, seen = [], set()
     if LEARNING_FILE.exists():
         for raw in LEARNING_FILE.read_text(encoding="utf-8").splitlines():
             entry = parse_watchlist_line(raw)
-            if entry:
+            if entry and entry["symbol"] not in seen:
+                seen.add(entry["symbol"])
                 items.append(entry)
     return items
 

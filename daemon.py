@@ -190,8 +190,11 @@ def do_learning_eod() -> None:
     if not universe:
         return
     snap = market_data.get_market_snapshot()
+    watch_syms = {i["symbol"] for i in config.load_watchlist()}
+    todo = [i for i in universe if i["symbol"] not in watch_syms]
+    skipped = len(universe) - len(todo)
     ok = 0
-    for item in universe:
+    for item in todo:
         try:
             ev = scoring.evaluate_symbol(item["symbol"],
                                          data=data_mod.fetch(item["symbol"]),
@@ -200,7 +203,8 @@ def do_learning_eod() -> None:
             ok += 1
         except Exception as exc:
             log(f"學習宇宙 {item['symbol']} 評估失敗：{exc}")
-    log(f"學習宇宙 EOD 快照：{ok}/{len(universe)} 完成")
+    log(f"學習宇宙 EOD 快照：{ok}/{len(todo)} 完成"
+        + (f"（{skipped} 隻已在 watchlist，跳過）" if skipped else ""))
     _hb("learning_eod")
 
 
