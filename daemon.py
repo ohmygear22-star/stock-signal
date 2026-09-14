@@ -29,7 +29,39 @@ HEARTBEAT = Path(__file__).parent / ".daemon_heartbeat.json"
 TICK = 20  # 主循環秒數
 
 DURATIONS = {"tripwire": 120, "rss": 120, "watch_scan": 900,
-             "serenity": 3600}
+             "serenity": 3600, "scoring": 1800}
+
+
+def do_scoring_push() -> None:
+    """V2：開盤時段每 30 分鐘 + 收盤後，逐標的五層評估 → 按推送策略決定是否通知。"""
+    if market_hours.status() not in ("open", "after_close"):
+        return
+    import data as data_mod
+    import market_data
+    import push_policy
+    import scoring
+    snap = market_data.get_market_snapshot()
+    for item in config.load_watchlist():
+        sym = item["symbol"]
+        try:
+            ev = scoring.evaluate_symbol(sym, data=data_mod.fetch(sym), market_snap=snap)
+        except Exception as exc:
+            log(f"scoring {sym} 失敗：{exc}")
+            continue
+        d = push_policy.decide(sym, ev)
+        if d["push"]:
+            body = (push_policy.format_critical(sym, ev, d["changes"]) if d["critical"]
+                    else push_policy.format_compact(ev, d["changes"]))
+            notify.send("🚨 訊號更新", body)
+            log(f"推送 {sym}：{'; '.join(d['changes'][:2])}")
+        try:
+            import ledger
+            ledger.record_prediction(ev)  # Phase 8 擴展；不存在時靜默跳過
+        except AttributeError:
+            pass
+        except Exception:
+            pass
+    _hb("scoring")
 
 
 def log(text: str) -> None:
@@ -153,6 +185,9 @@ def main() -> int:
             if now >= due["serenity"]:
                 do_serenity()
                 due["serenity"] = time.time() + DURATIONS["serenity"]
+            if now >= due["scoring"]:
+                do_scoring_push()
+                due["scoring"] = time.time() + DURATIONS["scoring"]
             do_daily_report()
             do_scoring()
             do_scorecard()

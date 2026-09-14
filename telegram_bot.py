@@ -82,6 +82,34 @@ def analyze_ticker(sym: str, profile: str = "stock", underlying: str | None = No
     return "\n".join(lines)
 
 
+def _detail(sym: str) -> str:
+    """V2 完整評估視圖（四 horizon + 五層 + 主因/主險）。"""
+    import push_policy
+    import scoring
+    try:
+        ev = scoring.evaluate_symbol(sym)
+    except Exception as exc:
+        return f"✗ {sym}：{exc}"
+    lines = [f"🔬 {sym} 完整評估（{ev['generated_at'][:16]}）", ""]
+    for hz in ("tomorrow", "week", "month", "year"):
+        h = ev["horizons"][hz]
+        lines.append(f"[{push_policy.HZ_LABEL[hz]}] {h['direction']} {h['confidence']}%"
+                     f"（加權 {h['score']:+.2f}）")
+        lines.append(f"  主因：{h['main_reason']}")
+        lines.append(f"  主險：{h['main_risk']}")
+    lines.append("")
+    for key, lab in push_policy.LAYER_LABEL.items():
+        l = ev["layers"][key]
+        if l["status"] == "unavailable":
+            lines.append(f"{lab}: UNAVAILABLE")
+        else:
+            reasons = "；".join(r[:40] for r in l["reasons"][:2])
+            lines.append(f"{lab}: {l['score']:+.2f}（conf {l['confidence']}, {l['status']}）{reasons}")
+    lines.append("")
+    lines.append("失效條件：方向反轉或置信度跌破 50 時另行推送。僅供參考，非投資建議")
+    return "\n".join(lines)
+
+
 def handle_message(msg: dict) -> None:
     chat_id = msg["chat"]["id"]
     if chat_id != config.TELEGRAM_CHAT_ID_INT:
@@ -94,8 +122,11 @@ def handle_message(msg: dict) -> None:
 
     if low.startswith("/start") or low.startswith("/help"):
         _reply(chat_id, "用法：\n直接發 ticker（如 CRWV）→ 完整分析\n"
-                        "/add 代碼[: leveraged_inverse[: 底層]] → 加入監控\n"
-                        "/del 代碼 → 移出監控\n/list → 監控清單\n/status → 系統健康")
+                        "/detail 代碼 → V2 五層×四時間窗評估\n"
+                        "/events 代碼 → 近期結構化事件\n"
+                        "/serenity 代碼 → Serenity 提及情況\n"
+                        "/refresh 代碼 → 立即重估並回報變化\n"
+                        "/add /del /list /status → 清單與健康")
     elif low.startswith("/add"):
         entry = config.parse_watchlist_line(text[4:].strip())
         if not entry:
@@ -122,6 +153,52 @@ def handle_message(msg: dict) -> None:
         removed = len(lines) - len(kept)
         config.WATCHLIST_FILE.write_text("\n".join(kept) + "\n", encoding="utf-8")
         _reply(chat_id, f"{'✓ 已移除 ' + sym if removed else '✗ 清單中沒有 ' + sym}")
+    elif low.startswith("/detail"):
+        sym = text[7:].strip().split()[0].upper() if text[7:].strip() else ""
+        _reply(chat_id, _detail(sym) if sym else "格式：/detail 代碼")
+    elif low.startswith("/events"):
+        sym = text[7:].strip().split()[0].upper() if text[7:].strip() else ""
+        if not sym:
+            _reply(chat_id, "格式：/events 代碼")
+            return
+        try:
+            import events
+            evs = events.recent_events_for(sym, days=7)
+            if not evs:
+                _reply(chat_id, f"{sym}：近 7 天無結構化事件")
+            else:
+                body = "\n".join(f"• [{e['category']}] {e['headline'][:80]}"
+                                 for e in evs[:8])
+                _reply(chat_id, f"{sym} 近 7 天事件：\n{body}\n僅供參考，非投資建議")
+        except Exception:
+            _reply(chat_id, "事件引擎未啟用")
+    elif low.startswith("/serenity"):
+        sym = text[9:].strip().split()[0].upper() if text[9:].strip() else ""
+        if not sym:
+            _reply(chat_id, "格式：/serenity 代碼")
+            return
+        entry = next((i for i in config.load_watchlist() if i["symbol"] == sym), None)
+        und = entry["underlying"] if entry else sym
+        mentions = serenity.recent_mentions(und, hours=24 * 60)
+        if not mentions:
+            _reply(chat_id, f"Serenity 近 60 天未提及 {und}（available，無相關論點）")
+        else:
+            _reply(chat_id, f"{und} 近 60 天提及 {len(mentions)} 次（最近 {mentions[0]['ts'][:10]}），"
+                            "完整觀點請直接發 ticker 查詢")
+    elif low.startswith("/refresh"):
+        sym = text[8:].strip().split()[0].upper() if text[8:].strip() else ""
+        if not sym:
+            _reply(chat_id, "格式：/refresh 代碼")
+            return
+        import push_policy
+        import scoring
+        try:
+            ev = scoring.evaluate_symbol(sym)
+        except Exception as exc:
+            _reply(chat_id, f"✗ {sym}：{exc}")
+            return
+        d = push_policy.decide(sym, ev, critical_event=None)
+        _reply(chat_id, push_policy.format_compact(ev, d["changes"]))
     elif low.startswith("/list"):
         wl = config.load_watchlist()
         _reply(chat_id, "監控清單：\n" + "\n".join(
