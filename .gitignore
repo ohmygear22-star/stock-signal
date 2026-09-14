@@ -16,3 +16,11 @@ signals_ledger.jsonl
 .tripwire_state.json
 .rss_push_state.json
 .daemon_heartbeat.json
+
+# V2 运行时状态（生成物，不入库）
+.push_state.json
+.events_state.json
+serenity_theses.jsonl
+predictions_ledger.jsonl
+weights.json
+weight_candidate.json

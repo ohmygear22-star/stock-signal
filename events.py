@@ -100,14 +100,32 @@ def _trump_level(headline: str) -> int | None:
     return 1  # 提及總統/白宮但無進展線索 → 至少是言論級
 
 
+POLITICAL_NEG_KWS = ["tariff", "sanction", "export control", "chip ban", "ban on",
+                     "restrict", "national security review", "blacklist"]
+POLITICAL_POS_KWS = ["trade deal", "tax cut", "deregulat", "ceasefire", "peace deal",
+                     "stimulus"]
+
+
 def _direction(headline: str, category: str, relevance: int) -> int | None:
-    """政治/地緣類在無 ticker/板塊關聯時不給方向（計畫鐵律）。"""
+    """保守取向：方向不明確就給 None（絕不靠通用關鍵詞硬猜政治頭條的漲跌）。
+    category/relevance/confirmation_level 不受方向未知的影響，照常保留。"""
+    low = headline.lower()
     if category in MARKET_WIDE and relevance < 55:
         return None
-    low = headline.lower()
-    if any(k in low for k in NEG_KWS):
+    if category in ("TRUMP_WHITE_HOUSE", "GEOPOLITICS"):
+        # 政治類：只有具體政策/地緣動作詞才給方向；模糊言論 → None
+        if any(k in low for k in POLITICAL_NEG_KWS):
+            return -6
+        if any(k in low for k in POLITICAL_POS_KWS):
+            return 6
+        return None
+    neg = any(k in low for k in NEG_KWS)
+    pos = any(k in low for k in POS_KWS)
+    if neg and pos:
+        return None  # 正負詞同現 = 模糊 → 不猜
+    if neg:
         return -6
-    if any(k in low for k in POS_KWS):
+    if pos:
         return 6
     return None
 
