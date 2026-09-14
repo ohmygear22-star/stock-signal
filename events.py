@@ -170,6 +170,15 @@ def collect(refresh_rss: bool = True) -> list[dict]:
         items, _ = macro.fetch_rss()
         for it in items:
             raw.append((it["title"], "rss", it["ts"]))
+        if not state.get("seen"):  # 引導（全新部署）：吸收 RSS 庫裡最近的標題
+            try:
+                rss_state = json.loads((BASE / ".rss_state.json").read_text())
+                known = {t for t, _, _ in raw}
+                for h in rss_state.get("recent", []):
+                    if h["title"] not in known:
+                        raw.append((h["title"], "rss", h["ts"]))
+            except Exception:
+                pass
         # 經濟日曆：已排程的 FED/CPI 事件（direction=None，只入上下文）
         for delta, ev in macro.upcoming(10):
             raw.append((f"{ev['label']}（{delta}天後）", "calendar", None))
@@ -211,6 +220,9 @@ def layer_score(symbol: str, horizon: str) -> dict:
     """供 scoring.events_layer 調用：按 horizon 加權的事件分。"""
     def _now():
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if not STATE_FILE.exists():
+        collect(refresh_rss=True)  # 懶初始化：全新部署時先入庫再評分
 
     if not STATE_FILE.exists():
         return {"score": 0.0, "confidence": 0.0, "status": "unavailable",
