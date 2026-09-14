@@ -257,6 +257,8 @@ def evaluate_symbol(symbol: str, data: dict | None = None, market_snap: dict | N
                   "events": ev, "options": opt}
         horizons[hz] = _horizon_output(hz, layers)
     return {"symbol": symbol, "profile": profile, "generated_at": _now(),
+            "price": (float(data["daily"]["Close"].iloc[-1])
+                      if data.get("daily") is not None and not data["daily"].empty else None),
             "layers": {"market": vibe, "performance": perf, "serenity": ser,
                        "events": horizons["tomorrow"]["layers"]["events"], "options": opt},
             "horizons": horizons}

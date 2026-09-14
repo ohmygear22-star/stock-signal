@@ -13,7 +13,59 @@ from pathlib import Path
 BASE = Path(__file__).parent
 LEDGER_FILE = BASE / "signals_ledger.jsonl"
 STATE_FILE = BASE / "ledger_state.json"
+PRED_FILE = BASE / "predictions_ledger.jsonl"  # V2：預測快照（每 ticker 每交易日一條 EOD 權威版）
 SCORE_HORIZON = 3  # 個交易日
+
+
+def _pred_rows() -> list[dict]:
+    if not PRED_FILE.exists():
+        return []
+    return [json.loads(l) for l in PRED_FILE.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def record_prediction(evaluation: dict) -> int:
+    """記錄預測快照：五層分數 + 各層可用性 + 四 horizon 方向/置信 + 價格 + 時間戳。
+    去重規則：同一 (ticker, horizon, 美東交易日) 只保留最新一條——
+    當天最後一輪評估（EOD）自動成為權威版本。回傳寫入條數。"""
+    from market_hours import today_et
+    day = today_et()
+    layers = evaluation["layers"]
+    status = {k: v["status"] for k, v in layers.items()}
+    new_rows = []
+    for hz in ("tomorrow", "week", "month", "year"):
+        h = evaluation["horizons"][hz]
+        new_rows.append({
+            "ts": _now_iso(), "generated_at": evaluation.get("generated_at"),
+            "trading_day": day, "ticker": evaluation["symbol"], "horizon": hz,
+            "price": evaluation.get("price"),
+            "market_score": layers["market"]["score"],
+            "performance_score": layers["performance"]["score"],
+            "serenity_score": layers["serenity"]["score"],
+            "event_score": layers["events"]["score"],
+            "options_score": layers["options"]["score"],
+            "layer_status": {"market": status["market"],
+                             "performance": status["performance"],
+                             "serenity": status["serenity"],
+                             "events": status["events"],
+                             "options": status["options"]},
+            "direction": h["direction"], "confidence": h["confidence"],
+            "weighted": h["score"],
+        })
+    existing = _pred_rows()
+    keep = [r for r in existing
+            if not (r.get("trading_day") == day and r.get("ticker") == evaluation["symbol"])]
+    with PRED_FILE.open("w", encoding="utf-8") as f:
+        for r in keep:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        for r in new_rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return len(new_rows)
+
+
+def prediction_status() -> str:
+    rows = _pred_rows()
+    days = {r.get("trading_day") for r in rows}
+    return f"預測快照 {len(rows)} 條（覆蓋 {len(days)} 個交易日）" if rows else "預測快照 0 條"
 
 
 def _now_iso() -> str:

@@ -56,12 +56,11 @@ def do_scoring_push() -> None:
             log(f"推送 {sym}：{'; '.join(d['changes'][:2])}")
         try:
             import ledger
-            ledger.record_prediction(ev)  # Phase 8 擴展；不存在時靜默跳過
-        except AttributeError:
-            pass
+            if ledger.record_prediction(ev) > 0:
+                _hb("ledger_scoring")  # 預測快照寫入（EOD 權威版去重後）
         except Exception:
             pass
-    _hb("scoring")
+    _hb("scoring_push")
 
 
 def log(text: str) -> None:
@@ -153,11 +152,11 @@ def do_daily_report() -> None:
 def do_scoring() -> None:
     now = market_hours.datetime_et()
     # 收盤日報後半小時以後才跑（且每天一次）
-    if now.time().hour != 17 or _done_today("scoring"):
+    if now.time().hour != 17 or _done_today("ledger_settlement"):
         return
     n = ledger.score_pending(lambda s: yf.Ticker(s).history(period="1mo", interval="1d"))
     log(f"賬本結算 {n} 條")
-    _hb("scoring")
+    _hb("ledger_settlement")
 
 
 def do_scorecard() -> None:
