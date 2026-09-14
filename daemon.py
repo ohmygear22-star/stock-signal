@@ -75,14 +75,16 @@ def _hb(task: str) -> None:
 
 def do_tripwire() -> None:
     for t in tripwire.check():
-        msg = f"⚡ 指數異動：{t['message']}"
         ledger.record_event("SPY" if "spy" in t["key"] else "MARKET",
                             f"tripwire_{t['key']}", "WARN",
                             "空" if "-" in t["message"] else "多",
                             price=0.0, extra={"note": t["message"]},
                             dedup_key=t["key"] + datetime.now().strftime("%Y%m%d%H"))
-        notify.send("⚡ 即時事件警報", msg)
-        log(f"絆網觸發：{t['message']}")
+        if t.get("critical"):
+            notify.send("🚨 市場劇烈異動", f"⚡ {t['message']}")
+            log(f"絆網 CRITICAL：{t['message']}")
+        else:
+            log(f"絆網觸發（僅記錄，不打擾）：{t['message']}")
     _hb("tripwire")
 
 
@@ -121,8 +123,7 @@ def do_serenity() -> None:
     if fresh:
         hits = serenity.match_watchlist(fresh, [i["symbol"] for i in config.load_watchlist()])
         for h in hits:
-            notify.send("📡 Serenity 提及", _serenity_alert_text(h))
-            records, meaningful = serenity.track_mention(h)  # V2：論點跟蹤
+            records, meaningful = serenity.track_mention(h)  # V2：論點跟蹤（Telegram 統一走 V2 push_policy）
             for rec in meaningful:
                 ledger.record_event(rec["ticker"], f"serenity_{rec['classification']}",
                                     "WARN", "中性" if not rec.get("stance") else
@@ -136,7 +137,8 @@ def do_serenity() -> None:
 
 
 def do_daily_report() -> None:
-    import main
+    """EOD 摘要（V2 格式）：四時間窗一覽 + 主險 + 宏觀面，取代 legacy 日報的 Telegram 直推。
+    同時把 EOD 權威預測快照落庫（每 ticker 每交易日一條）。"""
     status = market_hours.status()
     today = market_hours.today_et()
     if status != "after_close":
@@ -144,8 +146,35 @@ def do_daily_report() -> None:
     if config.DAILY_STATE_FILE.exists() and \
             config.DAILY_STATE_FILE.read_text().strip() == today:
         return
-    if main.run_report(config.load_watchlist(), "daily", "收盤完整分析（自動）") == 0:
-        config.DAILY_STATE_FILE.write_text(today)
+    import data as data_mod
+    import market_data
+    import push_policy
+    import scoring
+    snap = market_data.get_market_snapshot()
+    lines = ["📊 EOD 摘要（V2 四時間窗）", ""]
+    for item in config.load_watchlist():
+        sym = item["symbol"]
+        try:
+            ev = scoring.evaluate_symbol(sym, data=data_mod.fetch(sym), market_snap=snap)
+            ledger.record_prediction(ev)
+        except Exception as exc:
+            lines.append(f"{sym}：評估失敗 {exc}")
+            continue
+        hzs = []
+        for hz in ("tomorrow", "week", "month", "year"):
+            h = ev["horizons"][hz]
+            hzs.append(f"{push_policy.HZ_LABEL[hz]} {push_policy.DIR_ICON[h['direction']]} {h['confidence']}%")
+        price = f"${ev.get('price'):.2f}" if ev.get("price") else "—"
+        lines.append(f"{sym}（{price}）：" + "｜".join(hzs))
+        lines.append(f"  主險：{ev['horizons']['tomorrow']['main_risk'][:70]}")
+    try:
+        import macro
+        lines += [""] + macro.daily_section()
+    except Exception:
+        pass
+    lines += ["", "僅供參考，非投資建議"]
+    notify.send("📊 EOD 摘要（V2）", "\n".join(lines))
+    config.DAILY_STATE_FILE.write_text(today)
     _hb("daily_report")
 
 

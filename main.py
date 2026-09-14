@@ -71,7 +71,7 @@ def run_auto(forced: str | None) -> int:
 def run_report(watchlist: list[dict], mode: str, mode_label: str) -> int:
     report = [f"模式：{mode_label}｜監控：{', '.join(i['symbol'] for i in watchlist)}"]
     exit_code = 0
-    alert_worthy = False
+    stop_worthy = False
 
     for item in watchlist:
         sym = item["symbol"]
@@ -83,7 +83,7 @@ def run_report(watchlist: list[dict], mode: str, mode_label: str) -> int:
             continue
 
         signals, summary = rules.evaluate(sym, d, item["profile"])
-        alert_worthy |= any(s["level"] in ("WARN", "STOP") for s in signals)
+        stop_worthy |= any(s["level"] == "STOP" for s in signals)
         try:
             import ledger
             import macro
@@ -126,9 +126,10 @@ def run_report(watchlist: list[dict], mode: str, mode_label: str) -> int:
         except Exception:
             pass
 
-    # 推送規格（USER_GUIDE 承諾）：盤中只推 WARN/STOP 級；日報必推；其餘只寫日誌
-    if mode == "daily" or alert_worthy:
-        notify.send("📊 股票信號報告" if mode == "daily" else "⚠️ 盤中警報", "\n".join(report))
+    # V2-first 路由（2026-09-14 通知清理）：盤中僅 STOP 級（槓桿止損）直推；
+    # WARN 級技術信號與日報只寫日誌與賬本——它們照常進入 Performance 層與 push_policy
+    if mode == "intraday" and stop_worthy:
+        notify.send("🛑 止損警報", "\n".join(report))
     else:
         print("\n".join(report))
     return exit_code

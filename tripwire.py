@@ -20,6 +20,10 @@ SYMBOLS = {"SPY": None, "QQQ": None, "^VIX": None, "ES=F": None}
 IDX_5M_PCT = 1.0      # SPY/QQQ 5 分鐘瞬時門檻
 VIX_SURGE_PCT = 10.0  # VIX 相對當日開盤
 ES_6H_PCT = 1.0       # ES 期貨 6 小時漂移
+# CRITICAL 級（真正市場衝擊才直推 Telegram；普通觸發只記錄）
+IDX_5M_CRITICAL = 2.0
+VIX_CRITICAL = 25.0
+ES_6H_CRITICAL = 2.0
 
 
 def check(force_all: bool = False) -> list[dict]:
@@ -44,21 +48,24 @@ def check(force_all: bool = False) -> list[dict]:
                 chg = (last / ref - 1) * 100
                 if abs(chg) >= IDX_5M_PCT:
                     triggers.append({"key": f"{sym.lower()}_5m",
-                                     "message": f"{sym} 5 分鐘內 {chg:+.1f}%"})
+                                     "message": f"{sym} 5 分鐘內 {chg:+.1f}%",
+                                     "critical": abs(chg) >= IDX_5M_CRITICAL})
         elif sym == "^VIX":
             day_open = float(df["Open"].iloc[0])
             if day_open > 0:
                 chg = (last / day_open - 1) * 100
                 if chg >= VIX_SURGE_PCT:
                     triggers.append({"key": "vix_surge",
-                                     "message": f"VIX 較開盤 +{chg:.0f}%（恐慌急升）"})
+                                     "message": f"VIX 較開盤 +{chg:.0f}%（恐慌急升）",
+                                     "critical": chg >= VIX_CRITICAL})
         elif sym == "ES=F":
             ref = _price_minutes_ago(close, df.index, 360)
             if ref:
                 chg = (last / ref - 1) * 100
                 if abs(chg) >= ES_6H_PCT:
                     triggers.append({"key": "es_6h",
-                                     "message": f"ES 期貨 6 小時 {chg:+.1f}%（隔夜異動）"})
+                                     "message": f"ES 期貨 6 小時 {chg:+.1f}%（隔夜異動）",
+                                     "critical": abs(chg) >= ES_6H_CRITICAL})
 
     fresh = []
     for t in triggers:
