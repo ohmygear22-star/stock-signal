@@ -58,9 +58,8 @@ def decide(symbol: str, evaluation: dict, critical_event: dict | None = None) ->
                 should = True
                 if n["confidence"] >= 65 or o["confidence"] >= 65:
                     critical = True
-            elif abs(n["confidence"] - o["confidence"]) >= CONFIDENCE_DELTA_PP:
-                changes.append(f"{HZ_LABEL[hz]} {o['confidence']}% → {n['confidence']}%")
-                should = True
+            # 2026-09-15 owner 指令：置信度變動不再觸發推送（含 Year——任何 horizon
+            # 只有方向改變才推）。常規更新改由每日三段定時摘要承擔。
     if critical_event:
         should = True
         critical = critical or critical_event.get("level", 3) >= 3
@@ -86,6 +85,19 @@ def _layer_icon(score: float, status: str) -> str:
 
 LAYER_LABEL = {"market": "Market", "performance": "Performance", "serenity": "Serenity",
                "events": "Events", "options": "Options"}
+
+
+def format_today_digest(evaluations: list[dict], slot_label: str) -> str:
+    """定時「今日展望」摘要：每只監控股一行（明日 horizon + 主因）。"""
+    lines = [f"📋 今日展望（{slot_label}）", ""]
+    for ev in evaluations:
+        h = ev["horizons"]["tomorrow"]
+        price = f"${ev.get('price'):.2f}" if ev.get("price") else "—"
+        lines.append(f"{ev['symbol']}（{price}）：明日 {DIR_ICON[h['direction']]} "
+                     f"{h['direction']} {h['confidence']}%")
+        lines.append(f"  主因：{h['main_reason'][:60]}")
+    lines += ["", "僅供參考，非投資建議"]
+    return "\n".join(lines)
 
 
 def format_compact(evaluation: dict, changes: list[str],

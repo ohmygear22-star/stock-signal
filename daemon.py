@@ -141,8 +141,9 @@ def do_daily_report() -> None:
     同時把 EOD 權威預測快照落庫（每 ticker 每交易日一條）。"""
     status = market_hours.status()
     today = market_hours.today_et()
-    if status != "after_close":
-        return
+    from datetime import time as _time
+    if status != "after_close" or market_hours.datetime_et().time() < _time(16, 30):
+        return  # 盤後 +30 分鐘（owner 2026-09-15 指令）
     if config.DAILY_STATE_FILE.exists() and \
             config.DAILY_STATE_FILE.read_text().strip() == today:
         return
@@ -176,6 +177,41 @@ def do_daily_report() -> None:
     notify.send("📊 EOD 摘要（V2）", "\n".join(lines))
     config.DAILY_STATE_FILE.write_text(today)
     _hb("daily_report")
+
+
+def do_scheduled_digest() -> None:
+    """每日三段定時「今日展望」摘要（owner 2026-09-15 指令）：
+    盤前+30 = 04:30 ET（16:30 HKT）、盤中+30 = 10:00 ET（21:30 HKT）。
+    盤後+30 由 do_daily_report（EOD 摘要）承擔。錨定美東時段，冬令自動順延。"""
+    from datetime import time as _time
+    now = market_hours.datetime_et()
+    if now.weekday() >= 5:
+        return
+    t = now.time()
+    slot = None
+    if t >= _time(4, 30) and not _done_today("digest_premarket"):
+        slot = ("digest_premarket", "盤前")
+    elif t >= _time(10, 0) and t < _time(16, 0) and not _done_today("digest_intraday"):
+        slot = ("digest_intraday", "盤中")
+    if not slot:
+        return
+    key, label = slot
+    import data as data_mod
+    import market_data
+    import push_policy
+    import scoring
+    snap = market_data.get_market_snapshot()
+    evals = []
+    for item in config.load_watchlist():
+        try:
+            evals.append(scoring.evaluate_symbol(item["symbol"],
+                                                 data=data_mod.fetch(item["symbol"]),
+                                                 market_snap=snap))
+        except Exception as exc:
+            log(f"摘要 {item['symbol']} 評估失敗：{exc}")
+    if evals:
+        notify.send("📋 今日展望", push_policy.format_today_digest(evals, label))
+    _hb(key)
 
 
 def do_learning_eod() -> None:
@@ -256,6 +292,7 @@ def main() -> int:
                 do_scoring_push()
                 due["scoring"] = time.time() + DURATIONS["scoring"]
             do_daily_report()
+            do_scheduled_digest()
             do_learning_eod()
             do_scoring()
             do_scorecard()
