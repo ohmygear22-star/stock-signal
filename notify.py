@@ -4,6 +4,7 @@ from pathlib import Path
 
 import requests
 
+import config
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 LOG_PATH = Path(__file__).parent / "signals.log"
@@ -14,6 +15,8 @@ def send(title: str, body: str) -> None:
     print(text)
     with LOG_PATH.open("a", encoding="utf-8") as f:
         f.write(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}]\n{text}\n")
+    if not config.TELEGRAM_PUSH:
+        return  # 靜默採集模式：一切照常記錄，只是不發 Telegram（TELEGRAM_PUSH=off）
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         try:
             requests.post(

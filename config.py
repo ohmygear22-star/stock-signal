@@ -93,6 +93,7 @@ X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "").strip()
 OPTIONS_PROVIDER = os.getenv("OPTIONS_PROVIDER", "none").strip().lower()
 
 # Telegram 推送（可選；沒設定就只寫 signals.log + 螢幕輸出）
+TELEGRAM_PUSH = os.getenv("TELEGRAM_PUSH", "on").strip().lower() != "off"  # off = 靜默採集模式
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
