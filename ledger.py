@@ -156,6 +156,10 @@ def score_pending(price_history_fn) -> int:
         d = datetime.strptime(r["ts"], "%Y-%m-%dT%H:%M:%SZ").date()
         if (date.today() - d).days < SCORE_HORIZON + 2:  # 緩衝，保證有 3 個交易日
             continue
+        if not r.get("price"):
+            r["scored"] = True  # 市場級事件無錨定價格（price=0），無法方向化結算
+            changed += 1
+            continue
         sym = r["symbol"]
         if sym not in hist_cache:
             try:

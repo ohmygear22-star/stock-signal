@@ -249,9 +249,14 @@ def do_scoring() -> None:
     # 收盤日報後半小時以後才跑（且每天一次）
     if now.time().hour != 17 or _done_today("ledger_settlement"):
         return
-    n = ledger.score_pending(lambda s: yf.Ticker(s).history(period="1mo", interval="1d"))
-    log(f"賬本結算 {n} 條")
-    _hb("ledger_settlement")
+    try:
+        n = ledger.score_pending(lambda s: yf.Ticker(s).history(period="1mo", interval="1d"))
+        log(f"賬本結算 {n} 條")
+    except Exception as exc:
+        log(f"賬本結算異常：{exc}")
+        n = -1
+    if n >= 0:
+        _hb("ledger_settlement")
 
 
 def do_scorecard() -> None:
