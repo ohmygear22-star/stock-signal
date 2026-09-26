@@ -20,8 +20,9 @@ import yfinance as yf
 import config
 import rules
 
-HORIZONS = [1, 3, 5]
+HORIZONS = [1, 3, 5, 21, 252]  # Phase 9：加 21/252（資料不足自動縮窗）
 TRAIN_FRAC = 0.6
+REPORT_HORIZONS = [1, 3, 5, 21, 252]  # 每個 horizon 各出一張表
 MIN_N = 20
 SENSITIVITY = [(25.0, 75.0), (20.0, 80.0)]  # 主跑 30/70，另測這兩組
 BASELINES = ["SPY", "QQQ"]
@@ -41,10 +42,10 @@ def scan_symbol(sym: str, df, rsi_lo=30.0, rsi_hi=70.0, extra_sens=True):
     n = len(close)
     events = []
     drift = {h: float(np.mean([close.iloc[i + h] / close.iloc[i] - 1
-                               for i in range(60, n - max(HORIZONS))])) for h in HORIZONS}
+                               for i in range(60, n - 1) if i + h < n])) for h in HORIZONS}
 
     def _collect(lo, hi, keep_non_rsi):
-        for i in range(60, n - max(HORIZONS)):
+        for i in range(60, n - 1):
             for s in rules.daily_rules_at(ctx, i, entry_only=True, rsi_lo=lo, rsi_hi=hi):
                 rid = s["rule_id"]
                 is_rsi = rid.startswith("rsi_oversold") or rid.startswith("rsi_overbought")
@@ -54,7 +55,8 @@ def scan_symbol(sym: str, df, rsi_lo=30.0, rsi_hi=70.0, extra_sens=True):
                 rec = {"rule_id": rid, "symbol": sym, "i": i,
                        "date": df.index[i].date(), "sign": sign, "D": {}}
                 for h in HORIZONS:
-                    rec["D"][h] = sign * (float(close.iloc[i + h]) / float(close.iloc[i]) - 1)
+                    if i + h < n:  # 各 horizon 越界各自跳過（短窗資料不再全滅）
+                        rec["D"][h] = sign * (float(close.iloc[i + h]) / float(close.iloc[i]) - 1)
                 events.append(rec)
 
     _collect(rsi_lo, rsi_hi, keep_non_rsi=True)
@@ -71,8 +73,13 @@ def analyze(events: list[dict], drift: float, horizon: int = 3) -> dict:
         by_rule.setdefault(e["rule_id"], []).append(e)
     out = {}
     for rid, evs in by_rule.items():
-        evs_sorted = sorted(evs, key=lambda x: x["date"])
+        evs_sorted = sorted((e for e in evs if horizon in e["D"]), key=lambda x: x["date"])
         n = len(evs_sorted)
+        if n == 0:
+            out[rid] = {"n": 0, "hit": 0.0, "mean_d": 0.0, "edge": 0.0,
+                        "train_edge": None, "test_edge": None, "test_n": 0,
+                        "sign": next((e["sign"] for e in evs), 1)}
+            continue
         ds = np.array([e["D"][horizon] for e in evs_sorted])
         split = int(n * TRAIN_FRAC)
         tr, te = ds[:split], ds[split:]
@@ -101,7 +108,13 @@ def verdict(stats: dict) -> str:
 
 
 def run(years: int, tickers: list[str]) -> str:
-    symbols = tickers or ([i["symbol"] for i in config.load_watchlist()] + BASELINES)
+    if not tickers:  # Phase 9：觀察宇宙（watchlist + 學習宇宙）+ 基準對照
+        seen = []
+        for i in config.load_watchlist() + config.load_learning_universe():
+            if i["symbol"] not in seen:
+                seen.append(i["symbol"])
+        tickers = seen + [b for b in BASELINES if b not in seen]
+    symbols = tickers
     all_events, per_symbol, drifts, bar_counts = [], {}, {}, {}
     for sym in symbols:
         try:
@@ -114,25 +127,31 @@ def run(years: int, tickers: list[str]) -> str:
         except Exception as exc:
             per_symbol[sym] = f"✗ {exc}"
 
-    # 基準漂移 = 各標的 +3 日漂移按 K 棒數加權平均（多頭基準；空規則比 −漂移）
-    if drifts:
-        drift3 = float(np.average([drifts[s][3] for s in drifts],
-                                  weights=[bar_counts[s] for s in drifts]))
-    else:
-        drift3 = 0.0
-    stats = analyze(all_events, drift=float(drift3), horizon=3)
-    lines = [f"# 回測報告（生成 {datetime.now():%Y-%m-%d %H:%M}）", ""]
-    lines.append(f"標的：{'、'.join(symbols)}｜週期：{years} 年｜口徑：事件觸發後 +3 日方向化收益")
-    lines.append(f"全體基準漂移（+3日）：{drift3:+.2%}——多規則的「優勢」已扣它，空規則扣它的反向")
-    lines.append("（不含成本；命中率≠利潤；驗證段=後 40% 樣本）")
-    lines.append("")
-    lines.append("| 規則 | 次數 | 命中率 | 平均+3日 | 優勢(扣基準) | 訓練段 | 驗證段(次數) | 判定 |")
-    lines.append("|---|---|---|---|---|---|---|---|")
-    for rid, st in sorted(stats.items(), key=lambda kv: -kv[1]["n"]):
-        train = f"{st['train_edge']:+.2%}" if st["train_edge"] is not None else "—"
-        test = f"{st['test_edge']:+.2%} ({st['test_n']})" if st["test_edge"] is not None else "—"
-        lines.append(f"| {rid} | {st['n']} | {st['hit']:.0%} | {st['mean_d']:+.2%} | "
-                     f"{st['edge']:+.2%} | {train} | {test} | {verdict(st)} |")
+    # 基準漂移：每個 horizon 各自按 K 棒數加權聚合（多頭基準；空規則比 −漂移）
+    drift_by_h = {}
+    for h in HORIZONS:
+        if drifts:
+            drift_by_h[h] = float(np.average([drifts[s][h] for s in drifts],
+                                             weights=[bar_counts[s] for s in drifts]))
+        else:
+            drift_by_h[h] = 0.0
+
+    lines = [f"# 回測報告（Phase 9 多 horizon，生成 {datetime.now():%Y-%m-%d %H:%M}）", ""]
+    lines.append(f"標的：{len(symbols)} 只（觀察宇宙 + 基準）｜週期：{years} 年")
+    lines.append("（不含成本；命中率≠利潤；驗證段=後 40% 樣本；21/252 日資料不足自動縮窗）")
+    for h in REPORT_HORIZONS:
+        stats = analyze(all_events, drift=drift_by_h[h], horizon=h)
+        tag = f"+{h} 交易日"
+        lines.append("")
+        lines.append(f"## {tag}（基準漂移 {drift_by_h[h]:+.2%}）")
+        lines.append("")
+        lines.append("| 規則 | 次數 | 命中率 | 平均收益 | 優勢(扣基準) | 訓練段 | 驗證段(次數) | 判定 |")
+        lines.append("|---|---|---|---|---|---|---|---|")
+        for rid, st in sorted(stats.items(), key=lambda kv: -kv[1]["n"]):
+            train = f"{st['train_edge']:+.2%}" if st["train_edge"] is not None else "—"
+            test = f"{st['test_edge']:+.2%} ({st['test_n']})" if st["test_edge"] is not None else "—"
+            lines.append(f"| {rid} | {st['n']} | {st['hit']:.0%} | {st['mean_d']:+.2%} | "
+                         f"{st['edge']:+.2%} | {train} | {test} | {verdict(st)} |")
     lines.append("")
     lines.append("## 各標的事件數")
     lines.append(", ".join(f"{s}={n}" for s, n in per_symbol.items()))
